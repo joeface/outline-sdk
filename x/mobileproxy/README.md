@@ -21,12 +21,17 @@ To integrate the MobileProxy into a Flutter app, follow this excellent tutorial 
 
 ### Web Apps (Experimental)
 
-If you are looking into converting a web site or web app into a censorship-resistant mobile app, look at the [Web App Wrapper](https://github.com/Jigsaw-Code/outline-sdk/tree/main/x/examples/web-wrapper) that we are working on. 
+If you are looking into converting a web site or web app into a censorship-resistant mobile app, look at the [Outline App Maker](https://github.com/Jigsaw-Code/Jigsaw-Code/outline-app-maker). 
 
 ## Add the MobileProxy dependency
+
+### Import natively built libraries
+
+We build and release the Mobileproxy library separately. To learn how to use the pre-compiled version, see the [Mobileproxy SDK Repository](https://github.com/Jigsaw-Code/outline-sdk-mobileproxy#integration)
+
 ### Build the MobileProxy libraries for Android and iOS
 
-First, Build the Go Mobile binaries with [`go build`](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies)
+Should you want or need to build Mobileproxy yourself, first build the Go Mobile binaries with [`go build`](https://pkg.go.dev/cmd/go#hdr-Compile_packages_and_dependencies)
 
 From the `x/` directory:
 
@@ -47,6 +52,13 @@ Then build the iOS and Android libraries with [`gomobile bind`](https://pkg.go.d
 ```bash
 PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=11.0 -o "$(pwd)/out/mobileproxy.xcframework" github.com/Jigsaw-Code/outline-sdk/x/mobileproxy
 PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -o "$(pwd)/out/mobileproxy.aar" github.com/Jigsaw-Code/outline-sdk/x/mobileproxy
+```
+
+To include psiphon support please also include the `-tags=psiphon` flag.
+
+```bash
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=ios -iosversion=11.0 -tags=psiphon -o "$(pwd)/out/mobileproxy.xcframework" github.com/Jigsaw-Code/outline-sdk/x/mobileproxy
+PATH="$(pwd)/out:$PATH" gomobile bind -ldflags='-s -w' -target=android -androidapi=21 -tags=psiphon -o "$(pwd)/out/mobileproxy.aar" github.com/Jigsaw-Code/outline-sdk/x/mobileproxy
 ```
 
 Note: Gomobile expects gobind to be in the PATH, that's why we need to prebuild it, and set up the PATH accordingly.

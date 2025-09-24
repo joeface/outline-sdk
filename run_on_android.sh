@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2023 The Outline Authors
+# Copyright 2025 The Outline Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,11 +17,21 @@
 set -eu
 
 function main() {
-  declare -r bin="$1"
+  declare -r host_bin="$1"
+  declare -r android_run_dir="/data/local/tmp/run/$(basename "${host_bin}")"
+  # Set up cleanup to run whenever the script exits. `adb push` creates the directory.
+  trap "adb shell rm -r '${android_run_dir}'" EXIT
+  declare -r android_bin="${android_run_dir}/bin"
+  adb push "${host_bin}" "${android_bin}"
+
+  declare -r testdata_dir="$(pwd)/testdata"
+  if [[ "${host_bin##*.}" = "test" && -d "${testdata_dir}" ]]; then
+    adb push "${testdata_dir}" "${android_run_dir}/testdata"
+  fi
+
   # Remove the binary name from the args
   shift 1
-  # We are using Google's ~2MB minimal image. See https://github.com/GoogleContainerTools/distroless.
-  podman run --arch $(uname -m) --rm -it -v "${bin}":/outline/bin gcr.io/distroless/static-debian11 /outline/bin "$@"
+  adb shell cd "${android_run_dir}"";" ./bin "$@"
 }
 
 main "$@"

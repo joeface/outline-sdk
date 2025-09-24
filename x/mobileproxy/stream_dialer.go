@@ -66,7 +66,7 @@ type SmartDialerOptions struct {
 //
 // `testDomains` are used to test connectivity for each DNS/TLS strategy.
 // `config` defines the strategies to test. For an example, see:
-// https://github.com/Jigsaw-Code/outline-sdk/x/examples/smart-proxy/config.yaml
+// https://github.com/Jigsaw-Code/outline-sdk/blob/main/x/examples/smart-proxy/config.yaml
 func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerOptions {
 	return &SmartDialerOptions{
 		testDomains:        testDomains.list,
@@ -128,11 +128,10 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 		TestTimeout:  opt.testTimeout,
 		StreamDialer: opt.baseSD,
 		PacketDialer: opt.basePD,
-		Cache:        nil,
 	}
-
+	// When assigning a nil concrete value to an interface, the interface is not nil
+	// but contains a nil value. The `if` check is necessary to avoid a panic.
 	if opt.cache != nil {
-		// Fix for nil since StrategeyFinder expects StrategyResultCache
 		finder.Cache = opt.cache
 	}
 
