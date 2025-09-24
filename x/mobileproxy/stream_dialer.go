@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 // StreamDialer encapsulates the logic to create stream connections (like TCP).
 type StreamDialer struct {
 	transport.StreamDialer
+	TransportConfig string
 }
 
 var configModule = configurl.NewDefaultProviders()
@@ -41,7 +43,7 @@ func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &StreamDialer{dialer}, nil
+	return &StreamDialer{dialer, transportConfig}, nil
 }
 
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
@@ -56,6 +58,8 @@ type SmartDialerOptions struct {
 
 	logWriter io.Writer
 	cache     *strategyCacheAdapter
+
+	tlsTransportConfig string // The TLS config used for the last successful dialer
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -65,11 +69,12 @@ type SmartDialerOptions struct {
 // https://github.com/Jigsaw-Code/outline-sdk/blob/main/x/examples/smart-proxy/config.yaml
 func NewSmartDialerOptions(testDomains *StringList, config string) *SmartDialerOptions {
 	return &SmartDialerOptions{
-		testDomains: testDomains.list,
-		config:      []byte(config),
-		testTimeout: 5 * time.Second,
-		baseSD:      &transport.TCPDialer{},
-		basePD:      &transport.UDPDialer{},
+		testDomains:        testDomains.list,
+		config:             []byte(config),
+		testTimeout:        5 * time.Second,
+		baseSD:             &transport.TCPDialer{},
+		basePD:             &transport.UDPDialer{},
+		tlsTransportConfig: "",
 	}
 }
 
@@ -92,6 +97,28 @@ func (opt *SmartDialerOptions) SetStrategyCache(cache StrategyCache) {
 	}
 }
 
+// Updates option tlsTransportConfig property with selected TLS strategy
+// for remote StrategyFinder debugging.
+// Uses format [protocol]://[host]:[port] in case of ss/ws/socks5/wg
+// otherwise cuts tlsConfig by 10 chars.
+func (opt *SmartDialerOptions) SetTLSTransportStrategy(tlsConfig string) {
+	re := regexp.MustCompile(`^([a-z0-9]+)://(?:[^@]+@)?([^:/]+):(\d+)`)
+	matches := re.FindStringSubmatch(tlsConfig)
+	if len(matches) == 4 {
+		opt.tlsTransportConfig = fmt.Sprintf("%s://%s:%s", matches[1], matches[2], matches[3])
+	} else {
+		if len(tlsConfig) > 10 {
+			opt.tlsTransportConfig = tlsConfig[:10]
+		} else {
+			opt.tlsTransportConfig = tlsConfig
+		}
+	}
+}
+
+func (opt *SmartDialerOptions) GetTLSTransportStrategy() string {
+	return opt.tlsTransportConfig
+}
+
 // NewStreamDialer creates a new "Smart" StreamDialer using the configured options.
 // It finds the best-performing DNS/TLS strategy and returns a StreamDialer that uses this strategy.
 func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
@@ -112,7 +139,8 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to find dialer: %w", err)
 	}
-	return &StreamDialer{dialer}, nil
+	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
+	return &StreamDialer{dialer, opt.GetTLSTransportStrategy()}, nil
 }
 
 // NewSmartStreamDialer automatically selects a DNS and TLS strategy to use, and returns a [StreamDialer]
