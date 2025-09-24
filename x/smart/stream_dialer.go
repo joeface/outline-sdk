@@ -37,12 +37,13 @@ import (
 // go run -C ./x/examples/smart-proxy/ . -v -localAddr=localhost:1080 --transport="" --domain www.rferl.org  --config=<(echo '{"dns": [{"https": {"name": "doh.sb"}}]}')
 
 type StrategyFinder struct {
-	TestTimeout  time.Duration
-	LogWriter    io.Writer
-	StreamDialer transport.StreamDialer
-	PacketDialer transport.PacketDialer
-	Cache        StrategyResultCache
-	logMu        sync.Mutex
+	TestTimeout        time.Duration
+	LogWriter          io.Writer
+	StreamDialer       transport.StreamDialer
+	PacketDialer       transport.PacketDialer
+	Cache              StrategyResultCache
+	logMu              sync.Mutex
+	TLSTransportConfig string // The TLS config used for the last TCP successful dialer
 }
 
 func (f *StrategyFinder) log(format string, a ...any) {
@@ -345,6 +346,7 @@ func (f *StrategyFinder) findTLS(
 	if err != nil {
 		return nil, "", fmt.Errorf("could not find TLS strategy: %w", err)
 	}
+	f.TLSTransportConfig = result.Config
 	f.log("🏆 selected TLS strategy '%v' in %0.2fs\n\n", result.Config, time.Since(raceStart).Seconds())
 	tlsDialer := result.Dialer
 	return transport.FuncStreamDialer(func(searchCtx context.Context, raddr string) (transport.StreamConn, error) {
@@ -437,6 +439,7 @@ func (f *StrategyFinder) findFallback(
 	if err != nil {
 		return nil, nil, fmt.Errorf("could not find a working fallback: %w", err)
 	}
+	f.TLSTransportConfig = fallback.ConfigSignature
 	f.log("🏆 selected fallback '%v' in %0.2fs\n\n", fallback.ConfigSignature, time.Since(raceStart).Seconds())
 
 	return fallback.Dialer, fallback.Config, nil
