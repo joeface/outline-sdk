@@ -65,10 +65,7 @@ func main() {
 		sdOptions := mobileproxy.NewSmartDialerOptions(mobileproxy.NewListFromLines(*hostFlag), *transportFlag)
 		if *cacheFlag != "" {
 			sdOptions.SetStrategyCache(MemoryStrategyCache())
-		} else {
-			sdOptions.SetStrategyCache(nil)
 		}
-
 		dialer, err = sdOptions.NewStreamDialer()
 	} else {
 		dialer, err = mobileproxy.NewStreamDialerFromConfig(*transportFlag)
