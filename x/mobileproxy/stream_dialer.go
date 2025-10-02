@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -99,18 +98,17 @@ func (opt *SmartDialerOptions) SetStrategyCache(cache StrategyCache) {
 
 // Updates option tlsTransportConfig property with selected TLS strategy
 // for remote StrategyFinder debugging.
-// Uses format [protocol]://[host]:[port] in case of ss/ws/socks5/wg
-// otherwise cuts tlsConfig by 10 chars.
+// Uses format [scheme]://[host]:[port] in case of ss/ws/socks5/wg
+// otherwise uses String() method of the configurl.
 func (opt *SmartDialerOptions) SetTLSTransportStrategy(tlsConfig string) {
-	re := regexp.MustCompile(`^([a-z0-9]+)://(?:[^@]+@)?([^:/]+):(\d+)`)
-	matches := re.FindStringSubmatch(tlsConfig)
-	if len(matches) == 4 {
-		opt.tlsTransportConfig = fmt.Sprintf("%s://%s:%s", matches[1], matches[2], matches[3])
+	cfg, err := configurl.ParseConfig(tlsConfig)
+	if err != nil || cfg == nil {
+		opt.tlsTransportConfig = tlsConfig
 	} else {
-		if len(tlsConfig) > 10 {
-			opt.tlsTransportConfig = tlsConfig[:10]
+		if cfg.URL.Host == "" {
+			opt.tlsTransportConfig = cfg.URL.String()
 		} else {
-			opt.tlsTransportConfig = tlsConfig
+			opt.tlsTransportConfig = cfg.URL.Scheme + "://" + cfg.URL.Host
 		}
 	}
 }
@@ -139,6 +137,7 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to find dialer: %w", err)
 	}
+	//fmt.Println(finder.TLSTransportConfig)
 	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
 	return &StreamDialer{dialer, opt.GetTLSTransportStrategy()}, nil
 }
