@@ -74,6 +74,10 @@ func (p *Proxy) AddURLProxy(path string, dialer *StreamDialer) {
 		log.Println("Called Proxy.AddURLProxy after Stop")
 		return
 	}
+	if dialer == nil {
+		log.Println("Called Proxy.AddURLProxy with nil dialer")
+		return
+	}
 	if len(path) == 0 || path[0] != '/' {
 		path = "/" + path
 	}
@@ -86,12 +90,22 @@ func (p *Proxy) AddURLProxy(path string, dialer *StreamDialer) {
 // Stop gracefully stops the proxy service, waiting for at most timeout seconds before forcefully closing it.
 // The function takes a timeoutSeconds number instead of a [time.Duration] so it's compatible with Go Mobile.
 func (p *Proxy) Stop(timeoutSeconds int) {
+	if p.server == nil {
+		// Already stopped or never started
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
+
 	if err := p.server.Shutdown(ctx); err != nil {
-		log.Fatalf("Failed to shutdown gracefully: %v", err)
-		p.server.Close()
+		log.Printf("Failed to shutdown gracefully: %v", err)
+		// Force close if graceful shutdown fails
+		if p.server != nil {
+			p.server.Close()
+		}
 	}
+
 	// Allow garbage collection in case the user keeps holding a reference to the Proxy.
 	p.proxyHandler = nil
 	p.server = nil
