@@ -7,7 +7,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -56,6 +55,7 @@ func main() {
 	transportFlag := flag.String("transport", "", "Transport config, e.g. ss:// or a direct json/yaml config")
 	hostFlag := flag.String("domain", "", "Domain to find a strategy in case of smartFlag enabled")
 	smartFlag := flag.String("smart", "", "Use SmartDialer functionality to find a strategy")
+	measureFlag := flag.String("measure", "", "Enable counting")
 	cacheFlag := flag.String("cache", "", "Enable caching")
 	measurableFlag := flag.String("measure", "", "Enable measuring")
 	addrFlag := flag.String("localAddr", "localhost:8080", "Local proxy address")
@@ -80,15 +80,6 @@ func main() {
 
 	if err != nil {
 		log.Fatalf("NewStreamDialerFromConfig failed: %v", err)
-	}
-
-	var speedCtx context.Context
-	var speedCancel context.CancelFunc
-
-	// Enabling Session Measuring
-	if *measurableFlag != "" {
-		speedCtx, speedCancel = context.WithCancel(context.Background())
-		dialer.RunSpeedUpdater(speedCtx, 100*time.Millisecond) // update rate
 	}
 
 	proxy, err := mobileproxy.RunProxy(*addrFlag, dialer)
@@ -121,20 +112,8 @@ func main() {
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 	log.Print("Shutting down")
-
-	// Cancel the speed updater context to stop the goroutine
-	if speedCancel != nil {
-		speedCancel()
+	if *measureFlag != "" {
+		log.Printf("Bytes Sent: %d, Bytes Received: %d", proxy.BytesSent(), proxy.BytesReceived())
 	}
-
-	if *measurableFlag != "" {
-		timeEnd := time.Now()
-		duration := timeEnd.Sub(timeStart)
-		fmt.Printf("\nProxy Session Overview:\n Duration: %s", duration)
-		_, _, finalTotalSent, finalTotalReceived := dialer.GetSpeeds()
-		fmt.Printf("\n Sent: %.2f MB\n Received: %.2f MB\n Avg Speed: %.2f Mbps\n",
-			float64(finalTotalSent)/1_000_000, float64(finalTotalReceived)/1_000_000, float64(finalTotalSent+finalTotalReceived)/1_000_000/duration.Seconds())
-	}
-
 	proxy.Stop(2)
 }

@@ -26,6 +26,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/x/httpproxy"
@@ -33,11 +34,12 @@ import (
 
 // Proxy enables you to get the actual address bound by the server and stop the service when no longer needed.
 type Proxy struct {
-	host         string
-	port         int
-	listener     net.Listener // Add this
-	proxyHandler *httpproxy.ProxyHandler
-	server       *http.Server
+	host          string
+	port          int
+	proxyHandler  *httpproxy.ProxyHandler
+	server        *http.Server
+	bytesSent     int64
+	bytesReceived int64
 }
 
 // Address returns the IP and port the server is bound to.
@@ -53,6 +55,16 @@ func (p *Proxy) Host() string {
 // Port returns the port the server is bound to.
 func (p *Proxy) Port() int {
 	return p.port
+}
+
+// BytesSent returns the total number of bytes sent across all connections.
+func (p *Proxy) BytesSent() int64 {
+	return atomic.LoadInt64(&p.bytesSent)
+}
+
+// BytesReceived returns the total number of bytes received across all connections.
+func (p *Proxy) BytesReceived() int64 {
+	return atomic.LoadInt64(&p.bytesReceived)
 }
 
 // AddURLProxy sets up a URL-based proxy handler that activates when an incoming HTTP request matches
@@ -85,7 +97,8 @@ func (p *Proxy) AddURLProxy(path string, dialer *StreamDialer) {
 	// TODO(fortuna): Add support for multiple paths. I tried http.ServeMux, but it does request sanitization,
 	// which breaks the URL extraction: https://pkg.go.dev/net/http#hdr-Request_sanitizing.
 	// We can consider forking http.StripPrefix to provide a fallback instead of NotFound, and chaing them.
-	p.proxyHandler.FallbackHandler = http.StripPrefix(path, httpproxy.NewPathHandler(dialer.StreamDialer))
+	countingDialer := newCountingDialer(dialer.streamDialer, &p.bytesSent, &p.bytesReceived)
+	p.proxyHandler.FallbackHandler = http.StripPrefix(path, httpproxy.NewPathHandler(countingDialer))
 }
 
 // Stop gracefully stops the proxy service, waiting for at most timeout seconds before forcefully closing it.
@@ -129,7 +142,9 @@ func RunProxy(localAddress string, dialer *StreamDialer) (*Proxy, error) {
 	// shutdown. This can lead to lingering connections. We'll create a base context, propagated to requests,
 	// that is cancelled on shutdown. This enables handlers to gracefully terminate requests and close connections.
 	serverCtx, cancelCtx := context.WithCancelCause(context.Background())
-	proxyHandler := httpproxy.NewProxyHandler(dialer)
+	proxy := &Proxy{}
+	countingDialer := newCountingDialer(dialer.streamDialer, &proxy.bytesSent, &proxy.bytesReceived)
+	proxyHandler := httpproxy.NewProxyHandler(countingDialer)
 	proxyHandler.FallbackHandler = http.NotFoundHandler()
 	server := &http.Server{
 		Handler: proxyHandler,
@@ -150,10 +165,9 @@ func RunProxy(localAddress string, dialer *StreamDialer) (*Proxy, error) {
 	if err != nil {
 		return nil, fmt.Errorf("could not parse proxy port '%v': %v", portStr, err)
 	}
-	return &Proxy{
-		host:         host,
-		port:         port,
-		server:       server,
-		proxyHandler: proxyHandler,
-	}, nil
+	proxy.host = host
+	proxy.port = port
+	proxy.server = server
+	proxy.proxyHandler = proxyHandler
+	return proxy, nil
 }

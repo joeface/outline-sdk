@@ -20,7 +20,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,50 +31,68 @@ import (
 
 // StreamDialer encapsulates the logic to create stream connections (like TCP).
 type StreamDialer struct {
-	transport.StreamDialer
+	streamDialer    transport.StreamDialer
 	TransportConfig string
-
-	mu sync.RWMutex
-
-	// Cumulative byte counters
-	totalBytesSent     uint64
-	totalBytesReceived uint64
-
-	// Fields for speed calculation
-	lastUpdateTime    time.Time
-	lastBytesSent     uint64
-	lastBytesReceived uint64
-	sendSpeedMbps     float64
-	receiveSpeedMbps  float64
 }
 
-// DialStream wraps the underlying dialer's DialStream method to measure traffic.
-func (d *StreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
+// countingConn wraps a transport.StreamConn to count bytes transferred.
+type countingConn struct {
+	transport.StreamConn
+	bytesSent     *int64
+	bytesReceived *int64
+}
+
+// newCountingConn creates a new countingConn.
+func newCountingConn(conn transport.StreamConn, bytesSent, bytesReceived *int64) *countingConn {
+	return &countingConn{
+		StreamConn:    conn,
+		bytesSent:     bytesSent,
+		bytesReceived: bytesReceived,
+	}
+}
+
+// Read overrides the embedded StreamConn's Read method.
+func (c *countingConn) Read(p []byte) (n int, err error) {
+	n, err = c.StreamConn.Read(p)
+	if n > 0 {
+		atomic.AddInt64(c.bytesReceived, int64(n))
+	}
+	return
+}
+
+// Write overrides the embedded StreamConn's Write method.
+func (c *countingConn) Write(p []byte) (n int, err error) {
+	n, err = c.StreamConn.Write(p)
+	if n > 0 {
+		atomic.AddInt64(c.bytesSent, int64(n))
+	}
+	return
+}
+
+// countingDialer is a wrapper for a transport.StreamDialer that counts traffic.
+type countingDialer struct {
+	transport.StreamDialer
+	bytesSent     *int64
+	bytesReceived *int64
+}
+
+// newCountingDialer creates a new dialer that wraps the original
+// transport.StreamDialer and counts traffic.
+func newCountingDialer(originalDialer transport.StreamDialer, bytesSent, bytesReceived *int64) *countingDialer {
+	return &countingDialer{
+		StreamDialer:  originalDialer,
+		bytesSent:     bytesSent,
+		bytesReceived: bytesReceived,
+	}
+}
+
+// DialStream overrides the embedded dialer's method to wrap the connection.
+func (d *countingDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
 	conn, err := d.StreamDialer.DialStream(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
-	return &measuredConn{conn, d}, nil
-}
-
-// measuredConn wraps a transport.StreamConn to measure sent and received bytes.
-type measuredConn struct {
-	transport.StreamConn
-	dialer *StreamDialer
-}
-
-// Write intercepts the Write method to count sent bytes.
-func (c *measuredConn) Write(b []byte) (int, error) {
-	n, err := c.StreamConn.Write(b)
-	atomic.AddUint64(&c.dialer.totalBytesSent, uint64(n))
-	return n, err
-}
-
-// Read intercepts the Read method to count received bytes.
-func (c *measuredConn) Read(b []byte) (int, error) {
-	n, err := c.StreamConn.Read(b)
-	atomic.AddUint64(&c.dialer.totalBytesReceived, uint64(n))
-	return n, err
+	return newCountingConn(conn, d.bytesSent, d.bytesReceived), nil
 }
 
 var configModule = configurl.NewDefaultProviders()
@@ -92,13 +109,7 @@ func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &StreamDialer{
-		StreamDialer:    dialer,
-		TransportConfig: transportConfig,
-		mu:              sync.RWMutex{},
-		lastUpdateTime:  time.Now(),
-	}, nil
+	return &StreamDialer{streamDialer: dialer, TransportConfig: transportConfig}, nil
 }
 
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
@@ -273,7 +284,9 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	}
 	//fmt.Println(finder.TLSTransportConfig)
 	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
-	return &StreamDialer{dialer, opt.GetTLSTransportStrategy(), sync.RWMutex{}, 0, 0, time.Now(), 0, 0, 0, 0}, nil
+
+	streamDialer := &StreamDialer{streamDialer: dialer, TransportConfig: opt.GetTLSTransportStrategy()}
+	return streamDialer, nil
 }
 
 // NewSmartStreamDialer automatically selects a DNS and TLS strategy to use, and returns a [StreamDialer]
