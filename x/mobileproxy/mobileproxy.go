@@ -35,6 +35,7 @@ import (
 type Proxy struct {
 	host         string
 	port         int
+	listener     net.Listener // Add this
 	proxyHandler *httpproxy.ProxyHandler
 	server       *http.Server
 }
@@ -91,7 +92,6 @@ func (p *Proxy) AddURLProxy(path string, dialer *StreamDialer) {
 // The function takes a timeoutSeconds number instead of a [time.Duration] so it's compatible with Go Mobile.
 func (p *Proxy) Stop(timeoutSeconds int) {
 	if p.server == nil {
-		// Already stopped or never started
 		return
 	}
 
@@ -100,15 +100,18 @@ func (p *Proxy) Stop(timeoutSeconds int) {
 
 	if err := p.server.Shutdown(ctx); err != nil {
 		log.Printf("Failed to shutdown gracefully: %v", err)
-		// Force close if graceful shutdown fails
-		if p.server != nil {
-			p.server.Close()
-		}
+		p.server.Close()
 	}
 
-	// Allow garbage collection in case the user keeps holding a reference to the Proxy.
+	// Close listener
+	if p.listener != nil {
+		p.listener.Close()
+	}
+
+	// Cleanup
 	p.proxyHandler = nil
 	p.server = nil
+	p.listener = nil
 }
 
 // RunProxy runs a local web proxy that listens on localAddress, and handles proxy requests by

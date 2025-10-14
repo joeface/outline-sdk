@@ -16,7 +16,7 @@ package mobileproxy
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -27,6 +27,7 @@ import (
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/x/configurl"
 	"github.com/Jigsaw-Code/outline-sdk/x/smart"
+	"github.com/refraction-networking/conjure/pkg/station/log"
 )
 
 // StreamDialer encapsulates the logic to create stream connections (like TCP).
@@ -82,11 +83,22 @@ var configModule = configurl.NewDefaultProviders()
 // NewStreamDialerFromConfig creates a [StreamDialer] based on the given config.
 // The config format is specified in https://pkg.go.dev/github.com/Jigsaw-Code/outline-sdk/x/configurl#hdr-Config_Format.
 func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
+	if transportConfig == "" {
+		log.Println("transportConfig cannot be empty")
+		return nil, errors.New("transportConfig cannot be empty")
+	}
+
 	dialer, err := configModule.NewStreamDialer(context.Background(), transportConfig)
 	if err != nil {
 		return nil, err
 	}
-	return &StreamDialer{dialer, transportConfig, sync.RWMutex{}, 0, 0, time.Now(), 0, 0, 0, 0}, nil
+
+	return &StreamDialer{
+		StreamDialer:    dialer,
+		TransportConfig: transportConfig,
+		mu:              sync.RWMutex{},
+		lastUpdateTime:  time.Now(),
+	}, nil
 }
 
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
@@ -106,9 +118,18 @@ type SmartDialerOptions struct {
 
 }
 
-// RunSpeedUpdater starts a background goroutine to periodically calculate transfer speeds.
-// It should be called once after the dialer is created.
-func (d *StreamDialer) RunSpeedUpdater(updateInterval time.Duration) {
+// Add Close method to measuredConn
+func (c *measuredConn) Close() error {
+	return c.StreamConn.Close()
+}
+
+// Fix RunSpeedUpdater to return error and ensure cleanup
+func (d *StreamDialer) RunSpeedUpdater(ctx context.Context, updateInterval time.Duration) error {
+	if updateInterval <= 0 {
+		log.Println("updateInterval must be positive")
+		return errors.New("updateInterval must be positive")
+	}
+
 	d.mu.Lock()
 	d.lastUpdateTime = time.Now()
 	d.mu.Unlock()
@@ -118,36 +139,45 @@ func (d *StreamDialer) RunSpeedUpdater(updateInterval time.Duration) {
 		defer ticker.Stop()
 
 		for {
-			<-ticker.C
-			d.calculateSpeed()
+			select {
+			case <-ticker.C:
+				d.calculateSpeed()
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
+	return nil
 }
 
 // calculateSpeed computes the send and receive speed since the last update.
+// Use consistent synchronization
 func (d *StreamDialer) calculateSpeed() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	now := time.Now()
 	elapsedSeconds := now.Sub(d.lastUpdateTime).Seconds()
-	if elapsedSeconds <= 0 {
+	if elapsedSeconds <= 0.001 {
 		return
 	}
 
+	// Use atomic operations consistently
 	currentSent := atomic.LoadUint64(&d.totalBytesSent)
 	currentReceived := atomic.LoadUint64(&d.totalBytesReceived)
 
-	// Calculate bytes transferred during the interval
-	sentDelta := float64(currentSent - d.lastBytesSent)
-	receivedDelta := float64(currentReceived - d.lastBytesReceived)
+	// Handle overflow safely
+	var sentDelta, receivedDelta float64
+	if currentSent >= d.lastBytesSent {
+		sentDelta = float64(currentSent - d.lastBytesSent)
+	}
+	if currentReceived >= d.lastBytesReceived {
+		receivedDelta = float64(currentReceived - d.lastBytesReceived)
+	}
 
-	// Calculate speed in Bytes per second, then convert to Megabits per second
-	// (Bytes/sec * 8) / 1,000,000 = Mbps
 	d.sendSpeedMbps = (sentDelta * 8) / elapsedSeconds / 1_000_000
 	d.receiveSpeedMbps = (receivedDelta * 8) / elapsedSeconds / 1_000_000
 
-	// Update last known values for the next interval
 	d.lastUpdateTime = now
 	d.lastBytesSent = currentSent
 	d.lastBytesReceived = currentReceived
@@ -156,9 +186,10 @@ func (d *StreamDialer) calculateSpeed() {
 // GetSpeeds safely retrieves the latest calculated speeds and total usage.
 func (d *StreamDialer) GetSpeeds() (sendMbps, receiveMbps float64, totalSent, totalReceived uint64) {
 	d.mu.RLock()
-	defer d.mu.RUnlock()
 	sendMbps = d.sendSpeedMbps
 	receiveMbps = d.receiveSpeedMbps
+	d.mu.RUnlock()
+
 	totalSent = atomic.LoadUint64(&d.totalBytesSent)
 	totalReceived = atomic.LoadUint64(&d.totalBytesReceived)
 	return
@@ -238,7 +269,7 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 
 	dialer, err := finder.NewDialer(context.Background(), opt.testDomains, opt.config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to find dialer: %w", err)
+		return nil, err
 	}
 	//fmt.Println(finder.TLSTransportConfig)
 	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
