@@ -76,9 +76,6 @@ func main() {
 		log.Fatalf("NewStreamDialerFromConfig failed: %v", err)
 	}
 
-	if *measureFlag != "" {
-		dialer.EnableCounting()
-	}
 	proxy, err := mobileproxy.RunProxy(*addrFlag, dialer)
 	if err != nil {
 		log.Fatalf("RunProxy failed: %v", err)
@@ -96,7 +93,7 @@ func main() {
 	<-sig
 	log.Print("Shutting down")
 	if *measureFlag != "" {
-		log.Printf("Bytes Sent: %d, Bytes Received: %d", dialer.BytesSent(), dialer.BytesReceived())
+		log.Printf("Bytes Sent: %d, Bytes Received: %d", proxy.BytesSent(), proxy.BytesReceived())
 	}
 	proxy.Stop(2)
 }

@@ -32,26 +32,6 @@ import (
 type StreamDialer struct {
 	streamDialer    transport.StreamDialer
 	TransportConfig string
-	bytesSent       int64
-	bytesReceived   int64
-}
-
-// EnableCounting wraps the dialer to count traffic.
-func (sd *StreamDialer) EnableCounting() {
-	if _, ok := sd.streamDialer.(*countingDialer); ok {
-		return // Already counting
-	}
-	sd.streamDialer = newCountingDialer(sd.streamDialer, &sd.bytesSent, &sd.bytesReceived)
-}
-
-// BytesSent returns the total number of bytes sent across all connections.
-func (sd *StreamDialer) BytesSent() int64 {
-	return atomic.LoadInt64(&sd.bytesSent)
-}
-
-// BytesReceived returns the total number of bytes received across all connections.
-func (sd *StreamDialer) BytesReceived() int64 {
-	return atomic.LoadInt64(&sd.bytesReceived)
 }
 
 // countingConn wraps a transport.StreamConn to count bytes transferred.
@@ -140,7 +120,6 @@ type SmartDialerOptions struct {
 	cache     *strategyCacheAdapter
 
 	tlsTransportConfig string // The TLS config used for the last successful dialer
-	enableCounting     bool   // Whether to wrap the dialer for traffic counting.
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -176,11 +155,6 @@ func (opt *SmartDialerOptions) SetStrategyCache(cache StrategyCache) {
 	} else {
 		opt.cache = &strategyCacheAdapter{cache}
 	}
-}
-
-// SetEnableCounting enables or disables traffic counting on the created dialer.
-func (opt *SmartDialerOptions) SetEnableCounting(enable bool) {
-	opt.enableCounting = enable
 }
 
 // Updates option tlsTransportConfig property with selected TLS strategy
@@ -228,9 +202,6 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
 
 	streamDialer := &StreamDialer{streamDialer: dialer, TransportConfig: opt.GetTLSTransportStrategy()}
-	if opt.enableCounting {
-		streamDialer.EnableCounting()
-	}
 	return streamDialer, nil
 }
 
