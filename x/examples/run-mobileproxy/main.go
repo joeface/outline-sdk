@@ -8,10 +8,12 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"sync"
+	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/x/mobileproxy"
 )
@@ -54,6 +56,7 @@ func main() {
 	hostFlag := flag.String("domain", "", "Domain to find a strategy in case of smartFlag enabled")
 	smartFlag := flag.String("smart", "", "Use SmartDialer functionality to find a strategy")
 	cacheFlag := flag.String("cache", "", "Enable caching")
+	measurableFlag := flag.String("measure", "", "Enable measuring")
 	addrFlag := flag.String("localAddr", "localhost:8080", "Local proxy address")
 	urlProxyPrefixFlag := flag.String("proxyPath", "/proxy", "Path where to run the URL proxy. Set to empty (\"\") to disable it.")
 	flag.Parse()
@@ -66,7 +69,9 @@ func main() {
 		if *cacheFlag != "" {
 			sdOptions.SetStrategyCache(MemoryStrategyCache())
 		}
+
 		dialer, err = sdOptions.NewStreamDialer()
+
 	} else {
 		dialer, err = mobileproxy.NewStreamDialerFromConfig(*transportFlag)
 	}
@@ -74,6 +79,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("NewStreamDialerFromConfig failed: %v", err)
 	}
+
+	if *measurableFlag != "" {
+		dialer.RunSpeedUpdater(1 * time.Second)
+	}
+
 	proxy, err := mobileproxy.RunProxy(*addrFlag, dialer)
 	if err != nil {
 		log.Fatalf("RunProxy failed: %v", err)
@@ -85,10 +95,33 @@ func main() {
 	log.Printf("TLS Transport: %s", dialer.TransportConfig)
 	log.Printf("Proxy listening on %v", proxy.Address())
 
+	timeStart := time.Now()
+
+	if *measurableFlag != "" {
+		go func() {
+			for {
+				time.Sleep(1 * time.Second)
+				_, receiveMbps, _, totalReceived := dialer.GetSpeeds()
+				fmt.Printf("--> %.2f Mbps | %.2f MB \n",
+					receiveMbps,
+					float64(totalReceived)/1_000_000)
+			}
+		}()
+	}
+
 	// Wait for interrupt signal to stop the proxy.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 	log.Print("Shutting down")
+	if *measurableFlag != "" {
+		timeEnd := time.Now()
+		duration := timeEnd.Sub(timeStart)
+		fmt.Printf("\nSession Overview:\n Duration: %s", duration)
+		_, _, finalTotalSent, finalTotalReceived := dialer.GetSpeeds()
+		fmt.Printf("\n Sent: %.2f MB\n Received: %.2f MB\n Avg Speed: %.2f Mbps\n",
+			float64(finalTotalSent)/1_000_000, float64(finalTotalReceived)/1_000_000, float64(finalTotalSent+finalTotalReceived)/1_000_000/duration.Seconds())
+	}
+
 	proxy.Stop(2)
 }

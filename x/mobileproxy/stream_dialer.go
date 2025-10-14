@@ -20,6 +20,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
@@ -31,6 +33,48 @@ import (
 type StreamDialer struct {
 	transport.StreamDialer
 	TransportConfig string
+
+	mu sync.RWMutex
+
+	// Cumulative byte counters
+	totalBytesSent     uint64
+	totalBytesReceived uint64
+
+	// Fields for speed calculation
+	lastUpdateTime    time.Time
+	lastBytesSent     uint64
+	lastBytesReceived uint64
+	sendSpeedMbps     float64
+	receiveSpeedMbps  float64
+}
+
+// DialStream wraps the underlying dialer's DialStream method to measure traffic.
+func (d *StreamDialer) DialStream(ctx context.Context, addr string) (transport.StreamConn, error) {
+	conn, err := d.StreamDialer.DialStream(ctx, addr)
+	if err != nil {
+		return nil, err
+	}
+	return &measuredConn{conn, d}, nil
+}
+
+// measuredConn wraps a transport.StreamConn to measure sent and received bytes.
+type measuredConn struct {
+	transport.StreamConn
+	dialer *StreamDialer
+}
+
+// Write intercepts the Write method to count sent bytes.
+func (c *measuredConn) Write(b []byte) (int, error) {
+	n, err := c.StreamConn.Write(b)
+	atomic.AddUint64(&c.dialer.totalBytesSent, uint64(n))
+	return n, err
+}
+
+// Read intercepts the Read method to count received bytes.
+func (c *measuredConn) Read(b []byte) (int, error) {
+	n, err := c.StreamConn.Read(b)
+	atomic.AddUint64(&c.dialer.totalBytesReceived, uint64(n))
+	return n, err
 }
 
 var configModule = configurl.NewDefaultProviders()
@@ -42,7 +86,7 @@ func NewStreamDialerFromConfig(transportConfig string) (*StreamDialer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &StreamDialer{dialer, transportConfig}, nil
+	return &StreamDialer{dialer, transportConfig, sync.RWMutex{}, 0, 0, time.Now(), 0, 0, 0, 0}, nil
 }
 
 // SmartDialerOptions specifies the options for creating a "Smart Dialer".
@@ -59,6 +103,65 @@ type SmartDialerOptions struct {
 	cache     *strategyCacheAdapter
 
 	tlsTransportConfig string // The TLS config used for the last successful dialer
+
+}
+
+// RunSpeedUpdater starts a background goroutine to periodically calculate transfer speeds.
+// It should be called once after the dialer is created.
+func (d *StreamDialer) RunSpeedUpdater(updateInterval time.Duration) {
+	d.mu.Lock()
+	d.lastUpdateTime = time.Now()
+	d.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(updateInterval)
+		defer ticker.Stop()
+
+		for {
+			<-ticker.C
+			d.calculateSpeed()
+		}
+	}()
+}
+
+// calculateSpeed computes the send and receive speed since the last update.
+func (d *StreamDialer) calculateSpeed() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	now := time.Now()
+	elapsedSeconds := now.Sub(d.lastUpdateTime).Seconds()
+	if elapsedSeconds <= 0 {
+		return
+	}
+
+	currentSent := atomic.LoadUint64(&d.totalBytesSent)
+	currentReceived := atomic.LoadUint64(&d.totalBytesReceived)
+
+	// Calculate bytes transferred during the interval
+	sentDelta := float64(currentSent - d.lastBytesSent)
+	receivedDelta := float64(currentReceived - d.lastBytesReceived)
+
+	// Calculate speed in Bytes per second, then convert to Megabits per second
+	// (Bytes/sec * 8) / 1,000,000 = Mbps
+	d.sendSpeedMbps = (sentDelta * 8) / elapsedSeconds / 1_000_000
+	d.receiveSpeedMbps = (receivedDelta * 8) / elapsedSeconds / 1_000_000
+
+	// Update last known values for the next interval
+	d.lastUpdateTime = now
+	d.lastBytesSent = currentSent
+	d.lastBytesReceived = currentReceived
+}
+
+// GetSpeeds safely retrieves the latest calculated speeds and total usage.
+func (d *StreamDialer) GetSpeeds() (sendMbps, receiveMbps float64, totalSent, totalReceived uint64) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	sendMbps = d.sendSpeedMbps
+	receiveMbps = d.receiveSpeedMbps
+	totalSent = atomic.LoadUint64(&d.totalBytesSent)
+	totalReceived = atomic.LoadUint64(&d.totalBytesReceived)
+	return
 }
 
 // NewSmartDialerOptions initializes the required options for creating a "Smart Dialer".
@@ -139,7 +242,7 @@ func (opt *SmartDialerOptions) NewStreamDialer() (*StreamDialer, error) {
 	}
 	//fmt.Println(finder.TLSTransportConfig)
 	opt.SetTLSTransportStrategy(finder.TLSTransportConfig)
-	return &StreamDialer{dialer, opt.GetTLSTransportStrategy()}, nil
+	return &StreamDialer{dialer, opt.GetTLSTransportStrategy(), sync.RWMutex{}, 0, 0, time.Now(), 0, 0, 0, 0}, nil
 }
 
 // NewSmartStreamDialer automatically selects a DNS and TLS strategy to use, and returns a [StreamDialer]
