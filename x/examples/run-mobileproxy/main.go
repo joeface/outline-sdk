@@ -53,6 +53,7 @@ func main() {
 	transportFlag := flag.String("transport", "", "Transport config, e.g. ss:// or a direct json/yaml config")
 	hostFlag := flag.String("domain", "", "Domain to find a strategy in case of smartFlag enabled")
 	smartFlag := flag.String("smart", "", "Use SmartDialer functionality to find a strategy")
+	measureFlag := flag.String("measure", "", "Enable counting")
 	cacheFlag := flag.String("cache", "", "Enable caching")
 	addrFlag := flag.String("localAddr", "localhost:8080", "Local proxy address")
 	urlProxyPrefixFlag := flag.String("proxyPath", "/proxy", "Path where to run the URL proxy. Set to empty (\"\") to disable it.")
@@ -74,6 +75,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("NewStreamDialerFromConfig failed: %v", err)
 	}
+
+	if *measureFlag != "" {
+		dialer.EnableCounting()
+	}
 	proxy, err := mobileproxy.RunProxy(*addrFlag, dialer)
 	if err != nil {
 		log.Fatalf("RunProxy failed: %v", err)
@@ -90,5 +95,8 @@ func main() {
 	signal.Notify(sig, os.Interrupt)
 	<-sig
 	log.Print("Shutting down")
+	if *measureFlag != "" {
+		log.Printf("Bytes Sent: %d, Bytes Received: %d", dialer.BytesSent(), dialer.BytesReceived())
+	}
 	proxy.Stop(2)
 }

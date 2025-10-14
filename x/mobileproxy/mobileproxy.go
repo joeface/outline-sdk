@@ -84,7 +84,7 @@ func (p *Proxy) AddURLProxy(path string, dialer *StreamDialer) {
 	// TODO(fortuna): Add support for multiple paths. I tried http.ServeMux, but it does request sanitization,
 	// which breaks the URL extraction: https://pkg.go.dev/net/http#hdr-Request_sanitizing.
 	// We can consider forking http.StripPrefix to provide a fallback instead of NotFound, and chaing them.
-	p.proxyHandler.FallbackHandler = http.StripPrefix(path, httpproxy.NewPathHandler(dialer.StreamDialer))
+	p.proxyHandler.FallbackHandler = http.StripPrefix(path, httpproxy.NewPathHandler(dialer.streamDialer))
 }
 
 // Stop gracefully stops the proxy service, waiting for at most timeout seconds before forcefully closing it.
@@ -126,7 +126,7 @@ func RunProxy(localAddress string, dialer *StreamDialer) (*Proxy, error) {
 	// shutdown. This can lead to lingering connections. We'll create a base context, propagated to requests,
 	// that is cancelled on shutdown. This enables handlers to gracefully terminate requests and close connections.
 	serverCtx, cancelCtx := context.WithCancelCause(context.Background())
-	proxyHandler := httpproxy.NewProxyHandler(dialer)
+	proxyHandler := httpproxy.NewProxyHandler(dialer.streamDialer)
 	proxyHandler.FallbackHandler = http.NotFoundHandler()
 	server := &http.Server{
 		Handler: proxyHandler,
